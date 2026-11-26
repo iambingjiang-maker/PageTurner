@@ -1,0 +1,20 @@
+{
+  "name": "pageturner-san-mateo",
+  "version": "1.0.0",
+  "description": "Private family app for reserving books & Grab-and-Go pickup at San Mateo Public Library",
+  "type": "module",
+  "main": "server/index.js",
+  "scripts": {
+    "start": "node server/index.js",
+    "dev": "node --watch server/index.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.4.7",
+    "express": "^5.1.0"
+  }
+}

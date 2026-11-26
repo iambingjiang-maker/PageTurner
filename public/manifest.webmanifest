@@ -1,0 +1,17 @@
+{
+  "name": "PageTurner — San Mateo Library Grab & Go",
+  "short_name": "PageTurner",
+  "description": "Private family book reservation and Grab & Go hold shelf tracker for San Mateo Public Library.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#FAF7F2",
+  "theme_color": "#1F5E4B",
+  "icons": [
+    {
+      "src": "/icons/icon.jpg",
+      "sizes": "512x512",
+      "type": "image/jpeg",
+      "purpose": "any maskable"
+    }
+  ]
+}

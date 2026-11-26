@@ -1,0 +1,14 @@
+# Secrets & private family data (NEVER commit to GitHub!)
+.env
+.env.*
+!.env.example
+data/
+*.db
+*.sqlite
+*.key
+
+# Dependencies & runtime
+node_modules/
+npm-debug.log*
+.DS_Store
+*.log

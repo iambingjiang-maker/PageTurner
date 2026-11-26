@@ -1,0 +1,576 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>PageTurner — San Mateo Main Library Grab &amp; Go</title>
+    <meta
+      name="description"
+      content="Private family book log (NYT, B&N, Caldecott), monthly new-book scout, 1-click San Mateo Main Library holds, and Grab & Go pickup dashboard."
+    />
+    <meta name="theme-color" content="#FAF7F2" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="PageTurner" />
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <link rel="icon" type="image/jpeg" href="/icons/icon.jpg" />
+    <link rel="apple-touch-icon" href="/icons/icon.jpg" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <!-- Family Passcode Gate -->
+    <div id="passcode-overlay" class="lock-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="lock-title">
+      <div class="lock-card">
+        <img src="/icons/icon.jpg" alt="PageTurner emblem" class="lock-logo" />
+        <h1 id="lock-title">PageTurner Family Shelf</h1>
+        <p class="lock-subtitle">Enter your private family passcode to open San Mateo Main Library holds.</p>
+        <form id="passcode-form" class="lock-form">
+          <label for="passcode-input" class="sr-only">Family Passcode</label>
+          <input
+            id="passcode-input"
+            type="password"
+            inputmode="text"
+            autocomplete="current-password"
+            placeholder="Family passcode"
+            required
+          />
+          <button type="submit" class="btn btn-primary btn-full">Unlock</button>
+          <p id="passcode-error" class="form-error hidden" role="alert"></p>
+        </form>
+      </div>
+    </div>
+
+    <div id="app-shell" class="app-shell">
+      <header class="site-header">
+        <div class="header-inner">
+          <a href="#grab" class="brand" data-nav="grab" aria-label="PageTurner Home">
+            <img src="/icons/icon.jpg" alt="" class="brand-icon" />
+            <div class="brand-text">
+              <span class="brand-name">PageTurner</span>
+              <span class="brand-sub">San Mateo Main Library</span>
+            </div>
+          </a>
+
+          <nav class="desktop-nav" aria-label="Main navigation">
+            <button type="button" class="nav-tab active" data-nav="grab" id="nav-desktop-grab">
+              Grab &amp; Go
+              <span class="nav-badge" id="badge-desktop-ready">0</span>
+            </button>
+            <button type="button" class="nav-tab" data-nav="log" id="nav-desktop-log">
+              Book Log
+              <span class="nav-badge muted" id="badge-desktop-log">0</span>
+            </button>
+            <button type="button" class="nav-tab" data-nav="discover" id="nav-desktop-discover">
+              Discover
+            </button>
+            <button type="button" class="nav-tab" data-nav="settings" id="nav-desktop-settings">
+              Card &amp; Sheet
+            </button>
+          </nav>
+
+          <div class="header-actions">
+            <button
+              type="button"
+              id="btn-sync-header"
+              class="btn btn-secondary btn-sm"
+              title="Sync holds from San Mateo Main Library"
+            >
+              <span class="sync-icon" aria-hidden="true">↻</span>
+              <span class="sync-label">Sync</span>
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <div id="preview-banner" class="preview-banner hidden">
+        <div class="preview-banner-inner">
+          <p>
+            <strong>Preview Mode</strong> — Pick vetted NYT/B&amp;N/Caldecott books in <strong>Book Log</strong>, check
+            live San Mateo Main availability, and connect your card in <strong>Card &amp; Sheet</strong> when ready.
+          </p>
+          <button type="button" class="btn btn-text" data-nav="settings">Connect Card →</button>
+        </div>
+      </div>
+
+      <main class="main-content">
+        <!-- VIEW 1: GRAB & GO PICKUP DASHBOARD -->
+        <section id="view-grab" class="view active" aria-labelledby="grab-heading">
+          <div class="hero-bar">
+            <div>
+              <h1 id="grab-heading" class="page-title">Grab &amp; Go Pickup</h1>
+              <p id="grab-subtitle" class="page-subtitle">Checking your San Mateo Main Library hold shelf…</p>
+            </div>
+            <div class="hero-actions">
+              <button type="button" id="btn-quick-pick" class="btn btn-primary" data-nav="log">
+                Pick Books to Reserve
+              </button>
+            </div>
+          </div>
+
+          <div id="main-library-banner" class="main-branch-banner" aria-label="San Mateo Main Library live status"></div>
+
+          <div class="section-block">
+            <div class="section-header">
+              <h2 class="section-title">Ready on the Hold Shelf</h2>
+              <div class="section-meta-group">
+                <span id="ready-count-label" class="section-meta"></span>
+                <span id="last-synced-text" class="meta-caption"></span>
+              </div>
+            </div>
+            <div id="ready-holds-container" class="holds-stack"></div>
+          </div>
+
+          <div class="section-block">
+            <div class="section-header">
+              <h2 class="section-title">On the Way &amp; Waiting</h2>
+              <span id="waiting-count-label" class="section-meta"></span>
+            </div>
+            <div id="waiting-holds-container" class="waiting-grid"></div>
+          </div>
+        </section>
+
+        <!-- VIEW 2: CURATED BOOK LOG (SELECT -> CHECK MAIN LIBRARY -> 1-CLICK RESERVE + MONTHLY SCOUT) -->
+        <section id="view-log" class="view" aria-labelledby="log-heading">
+          <div class="hero-bar">
+            <div>
+              <h1 id="log-heading" class="page-title">Family Book Log</h1>
+              <p class="page-subtitle">
+                Vetted picks from NYT, B&amp;N, Caldecott &amp; your 4-year-old’s favorites. Check San Mateo Main
+                availability, tap books you want, and 1-click reserve!
+              </p>
+            </div>
+            <div class="hero-actions log-top-actions">
+              <button type="button" id="btn-check-main-avail" class="btn btn-primary btn-sm">
+                Check Main Library
+              </button>
+              <button type="button" id="btn-run-scout" class="btn btn-secondary btn-sm">
+                ✦ Scout New Books
+              </button>
+            </div>
+          </div>
+
+          <!-- Monthly Scout & Sheet Strip -->
+          <div class="scout-status-bar">
+            <div class="scout-status-left">
+              <span class="tag tag-shelf">Auto-Scouts Monthly</span>
+              <span id="scout-meta-text" class="meta-caption">
+                Automatically looks up vetted new picture books every month for your Book Log.
+              </span>
+            </div>
+            <div class="scout-status-actions">
+              <a
+                id="log-open-sheet-btn"
+                class="btn btn-ghost btn-sm hidden"
+                href="#"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Google Sheet ↗
+              </a>
+              <button type="button" id="btn-sync-sheet-top" class="btn btn-ghost btn-sm">↻ Sync Sheet</button>
+              <a href="/api/log/export.csv" class="btn btn-ghost btn-sm" download="pageturner-book-log.csv">CSV</a>
+            </div>
+          </div>
+
+          <!-- Collapsible Quick-Add Book Form (keeps iPhone 15 clean & scannable) -->
+          <details class="card-surface add-book-drawer" id="add-book-drawer">
+            <summary class="drawer-summary">
+              <span><strong>+ Add a Book We Found</strong> (or bulk-paste titles from your list)</span>
+            </summary>
+            <form id="log-add-form" class="drawer-form">
+              <div class="log-form-grid">
+                <div class="field">
+                  <label for="log-title">Book title</label>
+                  <input id="log-title" type="text" placeholder="e.g. Room on the Broom" required />
+                </div>
+                <div class="field">
+                  <label for="log-author">Author (optional)</label>
+                  <input id="log-author" type="text" placeholder="e.g. Julia Donaldson" />
+                </div>
+                <div class="field">
+                  <label for="log-status">Status</label>
+                  <select id="log-status">
+                    <option value="to_borrow">To Borrow</option>
+                    <option value="loved">Loved ❤️</option>
+                    <option value="liked">Liked 👍</option>
+                    <option value="read">Already Read</option>
+                    <option value="skip">Didn’t Love 👎</option>
+                  </select>
+                </div>
+                <div class="field">
+                  <label for="log-theme">Theme</label>
+                  <select id="log-theme">
+                    <option value="Funny & Silly">Funny &amp; Silly</option>
+                    <option value="Bedtime & Cozy">Bedtime &amp; Cozy</option>
+                    <option value="Trucks & Things That Go">Trucks &amp; Things That Go</option>
+                    <option value="Animals & Dinos">Animals &amp; Dinos</option>
+                    <option value="Feelings & Kindness">Feelings &amp; Kindness</option>
+                    <option value="Early Graphic Novels">Early Graphic Novels</option>
+                    <option value="Early STEM">Early STEM</option>
+                    <option value="Picture Book">Picture Book</option>
+                  </select>
+                </div>
+              </div>
+              <div class="queue-form-footer">
+                <input id="log-notes" type="text" placeholder="Optional note (e.g. friend recommended this!)" />
+                <button type="submit" class="btn btn-primary">Add to Book Log</button>
+              </div>
+            </form>
+
+            <form id="csv-import-form" class="bulk-import-box">
+              <label for="csv-import-text" class="meta-caption">
+                Or paste multiple books (one per line: <code>Title, Author</code> or CSV from Google Sheets):
+              </label>
+              <textarea
+                id="csv-import-text"
+                rows="3"
+                placeholder="Where the Wild Things Are, Maurice Sendak&#10;Chicka Chicka Boom Boom, Bill Martin Jr."
+              ></textarea>
+              <button type="submit" class="btn btn-secondary btn-sm">Import List</button>
+            </form>
+          </details>
+
+          <!-- Swipeable Filter Bar (iPhone 15 optimized!) -->
+          <div class="filter-row log-filter-row">
+            <div class="chip-scroll" id="log-filters" role="group" aria-label="Filter Book Log">
+              <button type="button" class="chip active" data-log-filter="to_borrow">To Borrow</button>
+              <button type="button" class="chip" data-log-filter="on_shelf_main">On Shelf at Main</button>
+              <button type="button" class="chip" data-log-filter="awards">NYT / B&amp;N / Caldecott</button>
+              <button type="button" class="chip" data-log-filter="loved">Loved ❤️</button>
+              <button type="button" class="chip" data-log-filter="scout">Monthly Scout</button>
+              <button type="button" class="chip" data-log-filter="all">All Books</button>
+            </div>
+            <span id="log-count-caption" class="meta-caption"></span>
+          </div>
+
+          <div id="book-log-list" class="log-cards-stack"></div>
+        </section>
+
+        <!-- VIEW 3: DISCOVER LIVE SAN MATEO SHELVES -->
+        <section id="view-discover" class="view" aria-labelledby="discover-heading">
+          <div class="hero-bar">
+            <div>
+              <h1 id="discover-heading" class="page-title">Discover New Books</h1>
+              <p class="page-subtitle">
+                Live San Mateo Main Library shelves matched to your 4-year-old’s ❤️ favorites—already-read books hidden
+                automatically.
+              </p>
+            </div>
+            <div class="hero-actions">
+              <div class="inline-card-picker">
+                <label for="reserve-card-select">Card</label>
+                <select id="reserve-card-select"></select>
+              </div>
+            </div>
+          </div>
+
+          <div class="discover-panel">
+            <div class="discover-mode-tabs" role="tablist" aria-label="Book discovery modes">
+              <button type="button" class="mode-tab active" data-discover-mode="foryou" role="tab">
+                Picked for Age 4
+              </button>
+              <button type="button" class="mode-tab" data-discover-mode="aisles" role="tab">
+                Curated Aisles
+              </button>
+              <button type="button" class="mode-tab" data-discover-mode="similar" role="tab">
+                Books Like…
+              </button>
+              <button type="button" class="mode-tab" data-discover-mode="search" role="tab">
+                Search
+              </button>
+            </div>
+
+            <div id="panel-foryou" class="mode-panel">
+              <p class="aisle-subtitle">
+                Fresh unread picture books physically on the shelf at San Mateo Main matched to your 4-year-old’s ❤️
+                favorites.
+              </p>
+            </div>
+
+            <div id="panel-aisles" class="mode-panel hidden">
+              <div id="aisle-chips" class="chip-scroll" role="group" aria-label="Curated book aisles"></div>
+              <p id="aisle-subtitle" class="aisle-subtitle"></p>
+            </div>
+
+            <form id="similar-form" class="mode-panel hidden">
+              <div class="search-input-wrap">
+                <label for="similar-query" class="sr-only">Enter a book your 4-year-old loved</label>
+                <input
+                  id="similar-query"
+                  type="search"
+                  placeholder="Type a favorite (e.g. Grumpy Monkey, Dragons Love Tacos, Dog Man)…"
+                  autocomplete="off"
+                />
+                <button type="submit" class="btn btn-primary">Find Similar</button>
+              </div>
+              <div class="quick-prompts chip-scroll">
+                <button type="button" class="prompt-chip" data-similar-pick="Grumpy Monkey">Grumpy Monkey</button>
+                <button type="button" class="prompt-chip" data-similar-pick="Dragons Love Tacos">Dragons Love Tacos</button>
+                <button type="button" class="prompt-chip" data-similar-pick="How to Catch a Dinosaur">How to Catch…</button>
+                <button type="button" class="prompt-chip" data-similar-pick="Little Blue Truck">Little Blue Truck</button>
+                <button type="button" class="prompt-chip" data-similar-pick="Dog Man">Dog Man</button>
+              </div>
+            </form>
+
+            <form id="catalog-search-form" class="mode-panel hidden">
+              <div class="search-input-wrap">
+                <label for="catalog-query" class="sr-only">Search San Mateo Public Library catalog</label>
+                <input
+                  id="catalog-query"
+                  type="search"
+                  placeholder="Search title, author, series, or ISBN…"
+                  autocomplete="off"
+                />
+                <button type="submit" class="btn btn-primary">Search</button>
+              </div>
+              <div class="search-filters-inline">
+                <div class="control-group">
+                  <label for="search-format-select">Format</label>
+                  <select id="search-format-select">
+                    <option value="physical">All Physical Books</option>
+                    <option value="book">Picture &amp; Story Books</option>
+                    <option value="graphic_novel">Graphic Novels</option>
+                    <option value="audiobook">Audiobook CDs</option>
+                  </select>
+                </div>
+                <div class="control-group">
+                  <label for="search-audience-select">Reader</label>
+                  <select id="search-audience-select">
+                    <option value="kids">Kids / Picture Books</option>
+                    <option value="all">All Ages</option>
+                    <option value="adult">Parents / Adults</option>
+                  </select>
+                </div>
+              </div>
+            </form>
+
+            <div class="discover-toolbar">
+              <div class="toggle-group">
+                <label class="toggle-pill" for="toggle-main-only">
+                  <input id="toggle-main-only" type="checkbox" checked />
+                  <span>On shelf at Main now</span>
+                </label>
+                <label class="toggle-pill" for="toggle-hide-read">
+                  <input id="toggle-hide-read" type="checkbox" checked />
+                  <span>Hide already read</span>
+                </label>
+              </div>
+
+              <div class="toolbar-right">
+                <span id="discover-source-label" class="meta-caption"></span>
+                <button type="button" id="btn-shuffle-picks" class="btn btn-secondary btn-sm">
+                  ↻ Fresh Picks
+                </button>
+              </div>
+            </div>
+          </div>
+
+          <div id="discover-results" class="book-grid"></div>
+        </section>
+
+        <!-- VIEW 4: LIBRARY CARD, GOOGLE SHEET BRIDGE & PRIVACY -->
+        <section id="view-settings" class="view" aria-labelledby="settings-heading">
+          <div class="hero-bar">
+            <div>
+              <h1 id="settings-heading" class="page-title">Library Card &amp; Sheet Sync</h1>
+              <p class="page-subtitle">
+                Connect your San Mateo Public Library card and private Google Sheet bridge. Credentials stay encrypted on
+                your private server and never touch GitHub.
+              </p>
+            </div>
+          </div>
+
+          <div class="settings-layout">
+            <div class="settings-main">
+              <div class="card-surface privacy-panel">
+                <h2 class="card-heading">Private Server Security &amp; iPhone 15 App</h2>
+                <ul class="privacy-list">
+                  <li>
+                    <strong>Encrypted Vault:</strong> Library card numbers, PINs &amp; webhook URLs are encrypted with
+                    AES-256-GCM in <code>data/vault.json</code> (excluded from GitHub via <code>.gitignore</code>).
+                  </li>
+                  <li>
+                    <strong>Install on iPhone 15:</strong> Open your private URL in Safari → tap <strong>Share</strong> →
+                    <strong>Add to Home Screen</strong> for full-screen native-app feel!
+                  </li>
+                  <li id="passcode-status-line">
+                    <strong>Family Passcode Gate:</strong> Checking status…
+                  </li>
+                </ul>
+              </div>
+
+              <form id="sheet-config-form" class="card-surface">
+                <h2 class="card-heading">Google Sheet 2-Way Sync</h2>
+                <p class="form-hint">
+                  Paste your Google Sheet link and optional Apps Script Web App URL (from
+                  <code>google-apps-script/Code.gs</code>) so every reservation, rating, and monthly scout pick syncs
+                  automatically.
+                </p>
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="sheet-url-input">Google Sheet URL</label>
+                    <input
+                      id="sheet-url-input"
+                      type="text"
+                      placeholder="https://docs.google.com/spreadsheets/d/…"
+                    />
+                  </div>
+                  <div class="field">
+                    <label for="sheet-webhook-input">Apps Script Web App URL (2-way sync)</label>
+                    <input
+                      id="sheet-webhook-input"
+                      type="password"
+                      autocomplete="off"
+                      placeholder="https://script.google.com/macros/s/…/exec"
+                    />
+                  </div>
+                </div>
+                <div class="form-actions" style="display:flex; gap:10px; flex-wrap:wrap; align-items:center;">
+                  <button type="submit" class="btn btn-primary btn-sm">Save Sheet Connection</button>
+                  <button type="button" id="btn-sync-sheet-settings" class="btn btn-secondary btn-sm">
+                    Test &amp; Sync Sheet Now
+                  </button>
+                  <a
+                    id="open-google-sheet-link"
+                    class="btn btn-ghost btn-sm hidden"
+                    href="#"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Open Google Sheet ↗
+                  </a>
+                </div>
+              </form>
+
+              <div class="card-surface">
+                <div class="section-header">
+                  <h2 class="card-heading">Connected Family Cards</h2>
+                  <button type="button" id="btn-sync-all-settings" class="btn btn-secondary btn-sm">Sync All Now</button>
+                </div>
+                <div id="cards-list" class="cards-list"></div>
+              </div>
+
+              <form id="add-card-form" class="card-surface">
+                <h2 class="card-heading">Connect a San Mateo Public Library Card</h2>
+                <p class="form-hint">
+                  Enter your 14-digit San Mateo Public Library barcode and PIN. Adding your first real card automatically
+                  replaces the sample preview holds.
+                </p>
+
+                <div class="form-grid">
+                  <div class="field">
+                    <label for="card-label">Card nickname</label>
+                    <input id="card-label" type="text" placeholder="e.g. Family Card" required />
+                  </div>
+                  <div class="field">
+                    <label for="card-shelf-name">Hold shelf name (last name)</label>
+                    <input id="card-shelf-name" type="text" placeholder="e.g. JIANG" required />
+                  </div>
+                  <div class="field">
+                    <label for="card-number">Library card number</label>
+                    <input
+                      id="card-number"
+                      type="text"
+                      inputmode="numeric"
+                      autocomplete="off"
+                      placeholder="2904…"
+                      required
+                    />
+                  </div>
+                  <div class="field">
+                    <label for="card-pin">Library PIN</label>
+                    <input
+                      id="card-pin"
+                      type="password"
+                      autocomplete="off"
+                      placeholder="Your 4-digit PIN"
+                      required
+                    />
+                  </div>
+                </div>
+
+                <div class="form-actions">
+                  <button type="submit" id="btn-save-card" class="btn btn-primary">Save Encrypted &amp; Sync Holds</button>
+                </div>
+              </form>
+            </div>
+
+            <aside class="settings-aside">
+              <form id="family-prefs-form" class="card-surface">
+                <h2 class="card-heading">Automation &amp; Preferences</h2>
+                <div class="field">
+                  <label for="pref-family-name">Family name</label>
+                  <input id="pref-family-name" type="text" placeholder="Our Family" />
+                </div>
+                <div class="field">
+                  <label for="pref-sync-mins">Hold shelf auto-sync</label>
+                  <select id="pref-sync-mins">
+                    <option value="15">Every 15 minutes</option>
+                    <option value="30">Every 30 minutes</option>
+                    <option value="60">Every hour</option>
+                    <option value="0">Manual sync only</option>
+                  </select>
+                </div>
+                <label class="toggle-pill" for="pref-auto-scout" style="margin: 12px 0 16px;">
+                  <input id="pref-auto-scout" type="checkbox" checked />
+                  <span>Auto-scout new kids books every month</span>
+                </label>
+                <button type="submit" class="btn btn-secondary btn-full">Save Preferences</button>
+              </form>
+
+              <div class="card-surface">
+                <h2 class="card-heading">San Mateo Main Library</h2>
+                <div id="branch-directory" class="branch-directory"></div>
+              </div>
+            </aside>
+          </div>
+        </section>
+      </main>
+
+      <!-- Floating 1-Click Batch Reserve Selection Bar (appears when 1+ books checked in Book Log) -->
+      <div id="batch-reserve-bar" class="batch-bar hidden" role="region" aria-label="Selected books to reserve">
+        <div class="batch-bar-inner">
+          <div class="batch-bar-info">
+            <strong id="batch-count-text">0 selected</strong>
+            <button type="button" id="btn-batch-clear" class="btn-link-light">Clear</button>
+          </div>
+          <button type="button" id="btn-batch-reserve" class="btn btn-terracotta">
+            Reserve Selected at Main
+          </button>
+        </div>
+      </div>
+
+      <!-- iPhone 15 Safe-Area Bottom Navigation -->
+      <nav class="mobile-nav" aria-label="Mobile navigation">
+        <button type="button" class="mobile-tab active" data-nav="grab" id="nav-mobile-grab">
+          <span class="mobile-tab-icon" aria-hidden="true">✓</span>
+          <span>Grab &amp; Go</span>
+          <span class="mobile-badge" id="badge-mobile-ready">0</span>
+        </button>
+        <button type="button" class="mobile-tab" data-nav="log" id="nav-mobile-log">
+          <span class="mobile-tab-icon" aria-hidden="true">☰</span>
+          <span>Book Log</span>
+          <span class="mobile-badge muted" id="badge-mobile-log">0</span>
+        </button>
+        <button type="button" class="mobile-tab" data-nav="discover" id="nav-mobile-discover">
+          <span class="mobile-tab-icon" aria-hidden="true">★</span>
+          <span>Discover</span>
+        </button>
+        <button type="button" class="mobile-tab" data-nav="settings" id="nav-mobile-settings">
+          <span class="mobile-tab-icon" aria-hidden="true">⌂</span>
+          <span>Card</span>
+        </button>
+      </nav>
+    </div>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+
+    <script type="module" src="/app.js"></script>
+  </body>
+</html>
