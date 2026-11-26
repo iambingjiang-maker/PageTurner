@@ -6,6 +6,7 @@ import { encryptSecret, decryptSecret, maskCardNumber, createSessionToken, verif
 import { getBranchLiveStatus, MAIN_BRANCH } from '../server/config.js';
 import { createApp } from '../server/index.js';
 import { resetStoreForTests } from '../server/store.js';
+import { BiblioCommonsClient } from '../server/bibliocommons.js';
 
 function startTestServer() {
   const app = createApp();
@@ -185,4 +186,37 @@ test('Family Book Log supports adding entries, CSV import, and CSV export', asyn
   } finally {
     await srv.close();
   }
+});
+
+test('BiblioCommonsClient extracts accountId, auth headers, and gateway error messages cleanly', () => {
+  const client = new BiblioCommonsClient();
+  client.ingestSessionPayload({
+    auth: { sessionId: 'sess-abc', authToken: 'tok-xyz', currentUserId: 999 },
+    entities: {
+      accounts: {
+        111111: { id: 111111, libId: 12 },
+        222222: { id: 222222, libId: 76 },
+      },
+      libraries: {
+        76: {
+          branches: [
+            { code: '7H', name: 'San Mateo-Hillsdale' },
+            { code: '7S', name: 'San Mateo-Main' },
+          ],
+        },
+      },
+    },
+  });
+
+  assert.equal(client.accountId, '222222');
+  assert.equal(client.mainBranchCode, '7S');
+  const headers = client.gatewayHeaders();
+  assert.equal(headers['X-Session-Id'], 'sess-abc');
+  assert.equal(headers['X-Access-Token'], 'tok-xyz');
+  assert.equal(
+    client.parseGatewayError(
+      JSON.stringify({ error: { message: 'Required parameters: accountId' } })
+    ),
+    'Required parameters: accountId'
+  );
 });

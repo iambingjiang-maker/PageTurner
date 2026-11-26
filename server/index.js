@@ -92,7 +92,18 @@ async function syncCardHolds(cardId) {
   }
 }
 
-async function placeSingleHold({ title, author, format, coverUrl, bibId, cardId, catalogUrl, queueItemId }) {
+async function placeSingleHold({
+  title,
+  author,
+  format,
+  coverUrl,
+  bibId,
+  cardId,
+  catalogUrl,
+  queueItemId,
+  sharedClient = null,
+  skipSync = false,
+}) {
   const store = getStore();
   const card = getDecryptedCard(cardId || store.cards[0]?.id);
   if (!card) {
@@ -139,20 +150,22 @@ async function placeSingleHold({ title, author, format, coverUrl, bibId, cardId,
     };
   }
 
-  const client = new BiblioCommonsClient();
+  const client = sharedClient || new BiblioCommonsClient();
   try {
-    const loginRes = await client.login(card.cardNumber, card.pin);
-    if (!loginRes.ok) {
-      updateCardSyncMeta(card.id, { status: 'error', error: loginRes.error });
-      return {
-        ok: false,
-        statusCode: 502,
-        error: loginRes.error,
-        requiresBrowser: Boolean(loginRes.requiresBrowser),
-        fallbackUrl:
-          catalogUrl ||
-          `${LIBRARY_CONFIG.catalogBaseUrl}/v2/search?query=${encodeURIComponent(title)}&searchType=smart`,
-      };
+    if (!sharedClient) {
+      const loginRes = await client.login(card.cardNumber, card.pin);
+      if (!loginRes.ok) {
+        updateCardSyncMeta(card.id, { status: 'error', error: loginRes.error });
+        return {
+          ok: false,
+          statusCode: 502,
+          error: loginRes.error,
+          requiresBrowser: Boolean(loginRes.requiresBrowser),
+          fallbackUrl:
+            catalogUrl ||
+            `${LIBRARY_CONFIG.catalogBaseUrl}/v2/search?query=${encodeURIComponent(title)}&searchType=smart`,
+        };
+      }
     }
 
     const placeRes = await client.placeHold({ bibId, title });
@@ -181,10 +194,16 @@ async function placeSingleHold({ title, author, format, coverUrl, bibId, cardId,
     if (queueItemId) removeQueueItem(queueItemId);
     await logAndPush(newHold);
 
-    if (process.env.VERCEL) {
-      await syncCardHolds(card.id).catch(() => {});
-    } else {
-      syncCardHolds(card.id).catch(() => {});
+    if (!skipSync) {
+      if (process.env.VERCEL) {
+        const holds = await client.fetchHolds().catch(() => null);
+        if (Array.isArray(holds)) {
+          replaceCardHolds(card.id, holds);
+          updateCardSyncMeta(card.id, { status: 'synced', error: null });
+        }
+      } else {
+        syncCardHolds(card.id).catch(() => {});
+      }
     }
 
     return {
@@ -435,6 +454,23 @@ export function createApp() {
     }
 
     const store = getStore();
+    const card = getDecryptedCard(cardId || store.cards[0]?.id);
+    let sharedClient = null;
+
+    if (card && !card.isDemo && card.cardNumber && card.pin) {
+      sharedClient = new BiblioCommonsClient();
+      const loginRes = await sharedClient.login(card.cardNumber, card.pin);
+      if (!loginRes.ok) {
+        updateCardSyncMeta(card.id, { status: 'error', error: loginRes.error });
+        return res.status(502).json({
+          ok: false,
+          error: loginRes.error,
+          requiresBrowser: Boolean(loginRes.requiresBrowser),
+          fallbackUrl: `${LIBRARY_CONFIG.catalogBaseUrl}/v2/holds`,
+        });
+      }
+    }
+
     const results = [];
     for (const id of logIds) {
       const entry = store.bookLog.find((b) => b.id === id);
@@ -447,17 +483,33 @@ export function createApp() {
         bibId: entry.bibId || entry.smplAvailability?.bibId || '',
         catalogUrl: entry.catalogUrl,
         cardId,
+        sharedClient,
+        skipSync: true,
       });
       results.push({ id: entry.id, title: entry.title, ...outcome });
     }
 
     const succeeded = results.filter((r) => r.ok).length;
+    if (sharedClient && card && succeeded > 0) {
+      const holds = await sharedClient.fetchHolds().catch(() => null);
+      if (Array.isArray(holds)) {
+        replaceCardHolds(card.id, holds);
+        updateCardSyncMeta(card.id, { status: 'synced', error: null });
+      }
+    }
+
+    const firstFailure = results.find((r) => !r.ok);
     res.json({
       ok: succeeded > 0,
       succeeded,
       total: results.length,
       results,
-      message: `Reserved ${succeeded} of ${results.length} ${results.length === 1 ? 'book' : 'books'} at San Mateo Main Library!`,
+      error: succeeded === 0 && firstFailure ? firstFailure.error : undefined,
+      fallbackUrl: succeeded === 0 && firstFailure ? firstFailure.fallbackUrl : undefined,
+      message:
+        succeeded > 0
+          ? `Reserved ${succeeded} of ${results.length} ${results.length === 1 ? 'book' : 'books'} at San Mateo Main Library!`
+          : firstFailure?.error || 'Could not place holds right now.',
     });
   });
 

@@ -742,7 +742,120 @@ export class BiblioCommonsClient {
   constructor() {
     this.jar = new CookieJar();
     this.accountId = null;
+    this.sessionId = null;
+    this.authToken = null;
     this.mainBranchCode = MAIN_BRANCH.biblioCode;
+  }
+
+  gatewayHeaders(extra = {}) {
+    const headers = {
+      Accept: 'application/json',
+      Origin: LIBRARY_CONFIG.catalogBaseUrl,
+      Referer: `${LIBRARY_CONFIG.catalogBaseUrl}/v2/holds`,
+      ...extra,
+    };
+    const sid = this.sessionId || this.jar.cookies.get('session_id');
+    const tok = this.authToken || this.jar.cookies.get('bc_access_token');
+    if (sid && tok) {
+      headers['X-Session-Id'] = sid;
+      headers['X-Access-Token'] = tok;
+    }
+    return headers;
+  }
+
+  ingestSessionPayload(data) {
+    if (!data || typeof data !== 'object') return;
+
+    const auth = data.auth || data;
+    if (auth.sessionId) this.sessionId = String(auth.sessionId);
+    if (auth.authToken) this.authToken = String(auth.authToken);
+
+    const accounts = data.entities?.accounts;
+    if (accounts && typeof accounts === 'object') {
+      const list = Object.values(accounts).filter(Boolean);
+      const smplAcct = list.find((a) => Number(a.libId || a.libraryId) === 76) || list[0];
+      if (smplAcct?.id != null) {
+        this.accountId = String(smplAcct.id);
+      } else {
+        const firstKey = Object.keys(accounts)[0];
+        if (firstKey && /^\d+$/.test(firstKey)) this.accountId = firstKey;
+      }
+    }
+
+    if (!this.accountId && data.entities?.users && typeof data.entities.users === 'object') {
+      for (const u of Object.values(data.entities.users)) {
+        if (Array.isArray(u?.accounts) && u.accounts.length > 0) {
+          this.accountId = String(u.accounts[0]);
+          break;
+        }
+        if (u?.accountId) {
+          this.accountId = String(u.accountId);
+          break;
+        }
+      }
+    }
+
+    if (!this.accountId) {
+      const directId =
+        data.accountId ||
+        data.auth?.accountId ||
+        data.app?.coreAssets?.accountId ||
+        data.currentAccountId;
+      if (directId != null && /^\d+$/.test(String(directId))) {
+        this.accountId = String(directId);
+      }
+    }
+
+    const branches =
+      data.entities?.libraries?.['76']?.branches ||
+      (data.entities?.branches ? Object.values(data.entities.branches) : []);
+    if (Array.isArray(branches)) {
+      for (const b of branches) {
+        if (b?.code && /san mateo.*main/i.test(b?.name || '')) {
+          this.mainBranchCode = b.code;
+        }
+      }
+    }
+  }
+
+  extractIsoStateFromHtml(html = '') {
+    const match = html.match(/<script[^>]*data-iso-key="_0"[^>]*>([\s\S]*?)<\/script>/i);
+    if (!match) return null;
+    try {
+      return JSON.parse(match[1]);
+    } catch {
+      return null;
+    }
+  }
+
+  async loadCurrentSession() {
+    try {
+      const url = `${LIBRARY_CONFIG.gatewayBaseUrl}/sessions/current?locale=en-US`;
+      const res = await this.request(url, {
+        headers: this.gatewayHeaders(),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        this.ingestSessionPayload(json);
+      }
+    } catch {
+      // Fallback to /v2/holds HTML below
+    }
+
+    if (!this.accountId) {
+      try {
+        const pageRes = await this.request(`${LIBRARY_CONFIG.catalogBaseUrl}/v2/holds`, {
+          redirect: 'follow',
+        });
+        const html = await pageRes.text();
+        const iso = this.extractIsoStateFromHtml(html);
+        if (iso) this.ingestSessionPayload(iso);
+      } catch {
+        // Best-effort fallback
+      }
+    }
+
+    return this.accountId;
   }
 
   async request(url, { method = 'GET', headers = {}, body, redirect = 'manual' } = {}) {
@@ -798,8 +911,83 @@ export class BiblioCommonsClient {
     );
   }
 
+  parseGatewayError(text = '') {
+    try {
+      const data = JSON.parse(text);
+      const msg =
+        data?.error?.message ||
+        data?.messaging?.[0]?.message ||
+        data?.message ||
+        (data?.error?.fieldErrors ? Object.values(data.error.fieldErrors).join(', ') : '');
+      return String(msg || '').trim();
+    } catch {
+      return '';
+    }
+  }
+
   async login(cardNumber, pin) {
-    const loginUrl = `${LIBRARY_CONFIG.catalogBaseUrl}/user/login`;
+    const cleanCard = String(cardNumber || '').trim();
+    const cleanPin = String(pin || '').trim();
+
+    // 1. Primary path: Official BiblioCommons v2 Gateway JSON session login
+    try {
+      const sessionRes = await this.request(
+        `${LIBRARY_CONFIG.gatewayBaseUrl}/sessions?locale=en-US`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Accept: 'application/json',
+            Origin: LIBRARY_CONFIG.catalogBaseUrl,
+            Referer: `${LIBRARY_CONFIG.catalogBaseUrl}/v2/holds`,
+          },
+          body: JSON.stringify({
+            username: cleanCard,
+            password: cleanPin,
+            destination: `${LIBRARY_CONFIG.catalogBaseUrl}/v2/holds`,
+          }),
+        }
+      );
+
+      const sessionText = await sessionRes.text();
+      if (this.detectChallenge(sessionText, sessionRes.status)) {
+        return {
+          ok: false,
+          requiresBrowser: true,
+          error:
+            'San Mateo Public Library requested a browser security check. Use the 1-tap catalog link to sign in directly.',
+        };
+      }
+
+      if (sessionRes.ok) {
+        try {
+          this.ingestSessionPayload(JSON.parse(sessionText));
+        } catch {
+          // Will load current session below
+        }
+        if (!this.accountId) {
+          await this.loadCurrentSession();
+        }
+        if (this.accountId) {
+          return { ok: true, accountId: this.accountId };
+        }
+      } else if (sessionRes.status === 401 || sessionRes.status === 400 || sessionRes.status === 422) {
+        const apiMsg = this.parseGatewayError(sessionText);
+        if (/invalid|incorrect|barcode|pin|password|login|credentials/i.test(apiMsg)) {
+          return {
+            ok: false,
+            error:
+              apiMsg ||
+              'San Mateo Public Library did not accept that card number or PIN. Please double-check them in Vercel / Library Card settings.',
+          };
+        }
+      }
+    } catch {
+      // Fall through to form-based login fallback
+    }
+
+    // 2. Fallback path: Classic BiblioCommons /user/login form posting to /v2/holds
+    const loginUrl = `${LIBRARY_CONFIG.catalogBaseUrl}/user/login?destination=%2Fv2%2Fholds`;
     const getRes = await this.request(loginUrl, { redirect: 'follow' });
     const getHtml = await getRes.text();
 
@@ -819,9 +1007,11 @@ export class BiblioCommonsClient {
 
     const form = new URLSearchParams({
       utf8: '✓',
-      name: String(cardNumber).trim(),
-      user_pin: String(pin).trim(),
-      remember_me: '1',
+      name: cleanCard,
+      user_pin: cleanPin,
+      remember_me: 'true',
+      local: 'false',
+      commit: 'Log In',
     });
     if (authenticityToken) form.set('authenticity_token', authenticityToken);
 
@@ -845,32 +1035,53 @@ export class BiblioCommonsClient {
       };
     }
 
-    if (postHtml.includes('Invalid barcode') || postHtml.includes('incorrect') || postRes.url?.includes('/user/login')) {
+    if (
+      postHtml.includes('Invalid barcode') ||
+      postHtml.includes('incorrect') ||
+      postRes.url?.includes('/user/login')
+    ) {
       return {
         ok: false,
-        error: 'San Mateo Public Library did not accept that card number or PIN. Please double-check them in Library Card settings.',
+        error:
+          'San Mateo Public Library did not accept that card number or PIN. Please double-check them in Library Card settings.',
       };
     }
 
-    const acctMatch =
-      postHtml.match(/"accountId"\s*:\s*"?(\d+)"?/) ||
-      postHtml.match(/"userId"\s*:\s*"?(\d+)"?/) ||
-      postHtml.match(/\/v2\/holds\?[^"]*accountId=(\d+)/);
-    if (acctMatch) {
-      this.accountId = acctMatch[1];
+    const iso = this.extractIsoStateFromHtml(postHtml);
+    if (iso) this.ingestSessionPayload(iso);
+
+    if (!this.accountId) {
+      const acctMatch =
+        postHtml.match(/"accountId"\s*:\s*"?(\d+)"?/) ||
+        postHtml.match(/"accounts"\s*:\s*\[\s*"?(\d+)"?/) ||
+        postHtml.match(/\/v2\/holds\?[^"]*accountId=(\d+)/);
+      if (acctMatch) this.accountId = acctMatch[1];
+    }
+
+    if (!this.accountId) {
+      await this.loadCurrentSession();
+    }
+
+    if (!this.accountId) {
+      return {
+        ok: false,
+        error:
+          'Could not establish a verified San Mateo Public Library patron session. Please double-check your card number and PIN.',
+      };
     }
 
     return { ok: true, accountId: this.accountId };
   }
 
   async fetchHolds() {
+    if (!this.accountId) {
+      await this.loadCurrentSession();
+    }
+
     if (this.accountId) {
-      const apiUrl = `${LIBRARY_CONFIG.gatewayBaseUrl}/holds?accountId=${encodeURIComponent(this.accountId)}&size=50&page=1`;
+      const apiUrl = `${LIBRARY_CONFIG.gatewayBaseUrl}/holds?accountId=${encodeURIComponent(this.accountId)}&size=50&page=1&locale=en-US`;
       const res = await this.request(apiUrl, {
-        headers: {
-          Accept: 'application/json',
-          Referer: `${LIBRARY_CONFIG.catalogBaseUrl}/v2/holds`,
-        },
+        headers: this.gatewayHeaders(),
       });
       if (res.ok) {
         const json = await res.json();
@@ -885,12 +1096,9 @@ export class BiblioCommonsClient {
       throw new Error('Library requested a browser verification check while refreshing holds.');
     }
 
-    const stateMatch = html.match(/<script[^>]*data-iso-key="_0"[^>]*>([\s\S]*?)<\/script>/i);
-    if (stateMatch) {
-      const parsed = JSON.parse(stateMatch[1]);
-      if (parsed?.app?.coreAssets?.accountId && !this.accountId) {
-        this.accountId = String(parsed.app.coreAssets.accountId);
-      }
+    const parsed = this.extractIsoStateFromHtml(html);
+    if (parsed) {
+      this.ingestSessionPayload(parsed);
       return this.parseGatewayHolds(parsed);
     }
 
@@ -956,22 +1164,32 @@ export class BiblioCommonsClient {
       };
     }
 
-    const endpoint = `${LIBRARY_CONFIG.gatewayBaseUrl}/holds`;
+    if (!this.accountId) {
+      await this.loadCurrentSession();
+    }
+
+    if (!this.accountId) {
+      return {
+        ok: false,
+        fallbackUrl: buildRecordUrl(targetBibId, title),
+        error: 'San Mateo Public Library session did not return an account ID. Tap below to complete the hold on SMPL.',
+      };
+    }
+
+    const endpoint = `${LIBRARY_CONFIG.gatewayBaseUrl}/holds?locale=en-US`;
     const res = await this.request(endpoint, {
       method: 'POST',
-      headers: {
+      headers: this.gatewayHeaders({
         'Content-Type': 'application/json',
-        Accept: 'application/json',
-        Origin: LIBRARY_CONFIG.catalogBaseUrl,
         Referer: buildRecordUrl(targetBibId, title),
-      },
+      }),
       body: JSON.stringify({
         metadataId: targetBibId,
         materialType: 'PHYSICAL',
-        accountId: this.accountId ? Number(this.accountId) : undefined,
+        accountId: Number(this.accountId),
         enableSingleClickHolds: false,
         materialParams: {
-          branchId: this.mainBranchCode,
+          branchId: this.mainBranchCode || '7S',
           expiryDate: null,
           errorMessageLocale: 'en-US',
         },
@@ -995,26 +1213,29 @@ export class BiblioCommonsClient {
       };
     }
 
+    const detail = this.parseGatewayError(text);
     return {
       ok: false,
       fallbackUrl: buildRecordUrl(targetBibId, title),
-      error: `San Mateo Main Library returned status ${res.status} when placing this hold. Complete it in 1 tap on the catalog page.`,
+      error: detail
+        ? `San Mateo Main Library: ${detail}`
+        : `San Mateo Main Library returned status ${res.status} when placing this hold. Complete it in 1 tap on SMPL.`,
     };
   }
 
   async cancelHold({ holdId, bibId }) {
+    if (!this.accountId) {
+      await this.loadCurrentSession();
+    }
     if (!holdId || !this.accountId) {
       return { ok: false, error: 'Hold ID or account session unavailable.' };
     }
-    const endpoint = `${LIBRARY_CONFIG.gatewayBaseUrl}/holds`;
+    const endpoint = `${LIBRARY_CONFIG.gatewayBaseUrl}/holds?locale=en-US`;
     const res = await this.request(endpoint, {
       method: 'DELETE',
-      headers: {
+      headers: this.gatewayHeaders({
         'Content-Type': 'application/json',
-        Accept: 'application/json',
-        Origin: LIBRARY_CONFIG.catalogBaseUrl,
-        Referer: `${LIBRARY_CONFIG.catalogBaseUrl}/v2/holds`,
-      },
+      }),
       body: JSON.stringify({
         accountId: Number(this.accountId),
         holdIds: [String(holdId)],
