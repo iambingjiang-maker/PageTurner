@@ -32,6 +32,7 @@ import {
   patchBookLogEntry,
   removeHoldRecord,
   removeQueueItem,
+  replaceBookLogFromSheet,
   replaceCardHolds,
   sanitizeCard,
   toggleHoldGrabbed,
@@ -50,6 +51,7 @@ import {
   searchCatalog,
 } from './bibliocommons.js';
 import {
+  deleteEntryFromSheetWebhook,
   exportBookLogCsv,
   parseBookLogCsv,
   pullFromSheetWebhook,
@@ -97,7 +99,7 @@ async function placeSingleHold({ title, author, format, coverUrl, bibId, cardId,
     return { ok: false, statusCode: 400, error: 'No library card configured.' };
   }
 
-  const logAndPush = (record) => {
+  const logAndPush = async (record) => {
     const entry = upsertBookLogEntry({
       title: record.title,
       author: record.author,
@@ -108,7 +110,9 @@ async function placeSingleHold({ title, author, format, coverUrl, bibId, cardId,
       bibId: record.bibId,
     });
     const webhookUrl = getSheetWebhookUrl();
-    if (webhookUrl) pushEntryToSheetWebhook(webhookUrl, entry).catch(() => {});
+    if (webhookUrl) {
+      await pushEntryToSheetWebhook(webhookUrl, entry).catch(() => {});
+    }
   };
 
   if (card.isDemo || !card.cardNumber || !card.pin) {
@@ -126,7 +130,7 @@ async function placeSingleHold({ title, author, format, coverUrl, bibId, cardId,
       isDemo: true,
     });
     if (queueItemId) removeQueueItem(queueItemId);
-    logAndPush(newHold);
+    await logAndPush(newHold);
     return {
       ok: true,
       mode: 'demo',
@@ -175,8 +179,13 @@ async function placeSingleHold({ title, author, format, coverUrl, bibId, cardId,
       isDemo: false,
     });
     if (queueItemId) removeQueueItem(queueItemId);
-    logAndPush(newHold);
-    syncCardHolds(card.id).catch(() => {});
+    await logAndPush(newHold);
+
+    if (process.env.VERCEL) {
+      await syncCardHolds(card.id).catch(() => {});
+    } else {
+      syncCardHolds(card.id).catch(() => {});
+    }
 
     return {
       ok: true,
@@ -196,7 +205,39 @@ async function placeSingleHold({ title, author, format, coverUrl, bibId, cardId,
   }
 }
 
+/**
+ * Keeps stateless serverless instances (Vercel) automatically in sync with your Google Sheet
+ * and live San Mateo Main Library holds on cold starts.
+ */
+async function ensureCloudHydrated({ forceSheet = false } = {}) {
+  const store = getStore();
+
+  // 1. Hydrate Book Log from Google Sheet if webhook configured and stale (> 5 min)
+  const webhookUrl = getSheetWebhookUrl();
+  if (webhookUrl) {
+    const lastSheet = store.settings.lastSheetSyncAt ? new Date(store.settings.lastSheetSyncAt).getTime() : 0;
+    if (forceSheet || !lastSheet || Date.now() - lastSheet > 5 * 60 * 1000) {
+      try {
+        const rows = await pullFromSheetWebhook(webhookUrl);
+        if (rows.length > 0) replaceBookLogFromSheet(rows);
+      } catch {
+        // Keep cached/starter bookLog if sheet is momentarily unreachable
+      }
+    }
+  }
+
+  // 2. Refresh live holds from San Mateo Main Library on cold start (> 15 min stale)
+  for (const c of store.cards) {
+    if (c.isDemo || !c.cardNumberEnc || !c.pinEnc) continue;
+    const lastSync = c.lastSyncedAt ? new Date(c.lastSyncedAt).getTime() : 0;
+    if (!lastSync || Date.now() - lastSync > 15 * 60 * 1000) {
+      await syncCardHolds(c.id).catch(() => {});
+    }
+  }
+}
+
 async function executeMonthlyScout(maxAdd = 8) {
+  await ensureCloudHydrated({ forceSheet: true });
   const store = getStore();
   const discovered = await runMonthlyNewBookScout({
     existingLog: store.bookLog,
@@ -225,7 +266,24 @@ export function createApp() {
   app.use(cookieParser());
 
   app.get('/api/health', (_req, res) => {
-    res.json({ ok: true, app: 'PageTurner', library: LIBRARY_CONFIG.name });
+    res.json({ ok: true, app: 'PageTurner', library: LIBRARY_CONFIG.name, vercel: Boolean(process.env.VERCEL) });
+  });
+
+  // Scheduled Monthly New-Book Scout endpoint (triggered automatically by vercel.json Cron)
+  app.get('/api/cron/monthly-scout', async (req, res) => {
+    const expected = process.env.CRON_SECRET?.trim();
+    if (expected) {
+      const authHeader = String(req.headers.authorization || '');
+      if (authHeader !== `Bearer ${expected}`) {
+        return res.status(401).json({ error: 'Unauthorized cron request' });
+      }
+    }
+    try {
+      const outcome = await executeMonthlyScout(6);
+      return res.json({ ok: true, ...outcome });
+    } catch (err) {
+      return res.status(500).json({ ok: false, error: err.message });
+    }
   });
 
   app.get('/api/auth/status', (req, res) => {
@@ -241,7 +299,8 @@ export function createApp() {
   app.use('/api', requireFamilyAuth);
 
   // Main bootstrap payload for the UI
-  app.get('/api/dashboard', (_req, res) => {
+  app.get('/api/dashboard', async (_req, res) => {
+    await ensureCloudHydrated();
     const store = getStore();
     const branch = getMainBranchWithStatus();
     const cards = store.cards.map(sanitizeCard);
@@ -509,14 +568,18 @@ export function createApp() {
     if (!updated) return res.status(404).json({ error: 'Log entry not found' });
     const webhookUrl = getSheetWebhookUrl();
     if (webhookUrl) {
-      pushEntryToSheetWebhook(webhookUrl, updated).catch(() => {});
+      await pushEntryToSheetWebhook(webhookUrl, updated).catch(() => {});
     }
     res.json({ ok: true, entry: updated });
   });
 
-  app.delete('/api/log/:id', (req, res) => {
+  app.delete('/api/log/:id', async (req, res) => {
     const removed = deleteBookLogEntry(req.params.id);
     if (!removed) return res.status(404).json({ error: 'Log entry not found' });
+    const webhookUrl = getSheetWebhookUrl();
+    if (webhookUrl) {
+      await deleteEntryFromSheetWebhook(webhookUrl, removed.title).catch(() => {});
+    }
     res.json({ ok: true });
   });
 
@@ -582,14 +645,14 @@ export function createApp() {
     const webhookUrl = getSheetWebhookUrl();
     if (!webhookUrl) {
       return res.status(400).json({
-        error: 'Add your Google Sheet Apps Script Web App URL in Library Card -> Google Sheet Sync first.',
+        error: 'Add your Google Sheet Apps Script Web App URL in Vercel Env Vars or Card & Sheet first.',
       });
     }
     try {
       const rows = await pullFromSheetWebhook(webhookUrl);
-      const merged = bulkMergeBookLog(rows);
+      const summary = replaceBookLogFromSheet(rows);
       markSheetSynced();
-      res.json({ ok: true, ...merged });
+      res.json({ ok: true, added: 0, updated: summary.total, total: summary.total });
     } catch (err) {
       res.status(502).json({ error: err.message || 'Could not sync with Google Sheet.' });
     }

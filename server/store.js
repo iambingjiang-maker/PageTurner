@@ -1,12 +1,15 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { LIBRARY_CONFIG } from './config.js';
 import { decryptSecret, encryptSecret, maskCardNumber } from './crypto.js';
 import { normalizeBookTitle, normalizeStatus } from './sheets.js';
 import { buildStarterBookLog } from './curatedSeed.js';
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+const DATA_DIR = process.env.VERCEL
+  ? path.join(os.tmpdir(), 'pageturner-data')
+  : path.resolve(process.cwd(), 'data');
 const VAULT_FILE = path.join(DATA_DIR, 'vault.json');
 
 function addDaysIso(daysFromNow) {
@@ -142,13 +145,15 @@ function ensureMigrations() {
   if (!state.settings) state.settings = {};
   if (state.settings.autoScoutMonthly === undefined) state.settings.autoScoutMonthly = true;
   if (state.settings.lastScoutAt === undefined) state.settings.lastScoutAt = null;
-  if (state.settings.googleSheetUrl === undefined) {
-    state.settings.googleSheetUrl = process.env.GOOGLE_SHEET_URL?.trim() || '';
+  if (process.env.GOOGLE_SHEET_URL?.trim()) {
+    state.settings.googleSheetUrl = process.env.GOOGLE_SHEET_URL.trim();
+  } else if (state.settings.googleSheetUrl === undefined) {
+    state.settings.googleSheetUrl = '';
   }
-  if (state.settings.sheetWebhookEnc === undefined) {
-    state.settings.sheetWebhookEnc = process.env.GOOGLE_SHEET_WEBHOOK_URL?.trim()
-      ? encryptSecret(process.env.GOOGLE_SHEET_WEBHOOK_URL.trim())
-      : '';
+  if (process.env.GOOGLE_SHEET_WEBHOOK_URL?.trim()) {
+    state.settings.sheetWebhookEnc = encryptSecret(process.env.GOOGLE_SHEET_WEBHOOK_URL.trim());
+  } else if (state.settings.sheetWebhookEnc === undefined) {
+    state.settings.sheetWebhookEnc = '';
   }
 }
 
@@ -586,6 +591,48 @@ export function bulkMergeBookLog(rows) {
     else added += 1;
   }
   return { added, updated, total: s.bookLog.length };
+}
+
+/**
+ * Hydrates Book Log authoritatively from Google Sheets (preserving any cached covers & Main Library availability).
+ */
+export function replaceBookLogFromSheet(rows) {
+  if (!Array.isArray(rows) || rows.length === 0) return { total: loadStore().bookLog.length };
+  const s = loadStore();
+  const prevByNorm = new Map(s.bookLog.map((b) => [normalizeBookTitle(b.title), b]));
+  const starterByNorm = new Map(buildStarterBookLog().map((b) => [normalizeBookTitle(b.title), b]));
+
+  const next = [];
+  for (const row of rows) {
+    if (!row?.title) continue;
+    const norm = normalizeBookTitle(row.title);
+    const prev = prevByNorm.get(norm);
+    const starter = starterByNorm.get(norm);
+    next.push({
+      id: prev?.id || starter?.id || `log_${crypto.randomBytes(6).toString('hex')}`,
+      date: row.date || prev?.date || new Date().toISOString().slice(0, 10),
+      title: String(row.title).trim(),
+      author: String(row.author || prev?.author || starter?.author || '').trim(),
+      reader: String(row.reader || prev?.reader || '4-Year-Old').trim(),
+      status: normalizeStatus(row.status || prev?.status || 'to_borrow'),
+      source: String(row.source || prev?.source || starter?.source || 'Added by Us').trim(),
+      theme: String(row.theme || prev?.theme || starter?.theme || 'Picture Book').trim(),
+      notes: String(row.notes ?? prev?.notes ?? '').trim(),
+      coverUrl: prev?.coverUrl || starter?.coverUrl || '',
+      catalogUrl:
+        row.catalogUrl ||
+        prev?.catalogUrl ||
+        starter?.catalogUrl ||
+        `${LIBRARY_CONFIG.catalogBaseUrl}/v2/search?query=${encodeURIComponent(row.title)}&searchType=smart`,
+      bibId: row.bibId || prev?.bibId || '',
+      smplAvailability: prev?.smplAvailability || null,
+    });
+  }
+
+  s.bookLog = next;
+  s.settings.lastSheetSyncAt = new Date().toISOString();
+  persist();
+  return { total: next.length };
 }
 
 export function deleteBookLogEntry(id) {

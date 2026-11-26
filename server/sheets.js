@@ -206,6 +206,7 @@ export async function pushEntryToSheetWebhook(webhookUrl, entry) {
       headers: { 'Content-Type': 'application/json' },
       redirect: 'follow',
       body: JSON.stringify({
+        action: 'upsert',
         date: entry.date || new Date().toISOString().slice(0, 10),
         title: entry.title,
         author: entry.author || '',
@@ -217,6 +218,21 @@ export async function pushEntryToSheetWebhook(webhookUrl, entry) {
         catalogUrl: entry.catalogUrl || '',
         bibId: entry.bibId || '',
       }),
+    });
+    return { ok: res.ok };
+  } catch (err) {
+    return { ok: false, error: err.message };
+  }
+}
+
+export async function deleteEntryFromSheetWebhook(webhookUrl, title) {
+  if (!webhookUrl || !title) return { ok: false, skipped: true };
+  try {
+    const res = await fetch(webhookUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      redirect: 'follow',
+      body: JSON.stringify({ action: 'delete', title }),
     });
     return { ok: res.ok };
   } catch (err) {

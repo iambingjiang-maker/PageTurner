@@ -1,13 +1,13 @@
 /**
- * PageTurner <-> Google Sheets 2-Way Sync Bridge (10-Column BookLog)
+ * PageTurner <-> Google Sheets 2-Way Cloud Database Bridge (10-Column BookLog)
  *
  * 1-Minute Setup inside your "PageTurner — Family Book Log" Google Sheet:
  * 1. Click Extensions -> Apps Script
  * 2. Paste this entire file and click Save
  * 3. Click Deploy -> New deployment -> Web app
  *    - Execute as: Me
- *    - Who has access: Anyone (keeps your sheet private; only the random URL can talk to it)
- * 4. Copy the Web App URL and paste it into PageTurner -> Library Card -> Google Sheet Sync
+ *    - Who has access: Anyone (keeps your sheet private; only your random Web App URL can talk to it)
+ * 4. Copy the Web App URL and add it as GOOGLE_SHEET_WEBHOOK_URL in Vercel Environment Variables!
  */
 
 const SHEET_NAME = 'BookLog';
@@ -62,6 +62,15 @@ function doPost(e) {
       existingRow = i + 1;
       break;
     }
+  }
+
+  if (body.action === 'delete') {
+    if (existingRow > 0) {
+      sheet.deleteRow(existingRow);
+    }
+    return ContentService.createTextOutput(JSON.stringify({ ok: true, deleted: existingRow > 0 })).setMimeType(
+      ContentService.MimeType.JSON
+    );
   }
 
   const rowValues = [

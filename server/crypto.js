@@ -1,15 +1,18 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 
-const DATA_DIR = path.resolve(process.cwd(), 'data');
+const DATA_DIR = process.env.VERCEL
+  ? path.join(os.tmpdir(), 'pageturner-data')
+  : path.resolve(process.cwd(), 'data');
 const KEY_FILE = path.join(DATA_DIR, '.vault.key');
 
 let cachedMasterKey = null;
 
 /**
- * Resolves a 32-byte encryption key from ENCRYPTION_SECRET env var,
- * or generates & persists a local random key in data/.vault.key (gitignored).
+ * Resolves a deterministic 32-byte key from ENCRYPTION_SECRET (or APP_PASSCODE / SMPL_PIN on Vercel)
+ * so signed HttpOnly session cookies remain valid across stateless serverless invocations.
  */
 function getMasterKey() {
   if (cachedMasterKey) return cachedMasterKey;
@@ -17,6 +20,18 @@ function getMasterKey() {
   const envSecret = process.env.ENCRYPTION_SECRET?.trim();
   if (envSecret && envSecret !== 'change-me-to-a-long-random-secret') {
     cachedMasterKey = crypto.scryptSync(envSecret, 'pageturner-smpl-vault-v1', 32);
+    return cachedMasterKey;
+  }
+
+  // On Vercel serverless, derive deterministically from configured secrets if ENCRYPTION_SECRET wasn't set
+  if (process.env.VERCEL) {
+    const fallbackSeed = [
+      process.env.APP_PASSCODE || '',
+      process.env.SMPL_PIN || '',
+      process.env.GOOGLE_SHEET_WEBHOOK_URL || '',
+      process.env.VERCEL_PROJECT_ID || 'pageturner-vercel',
+    ].join('|');
+    cachedMasterKey = crypto.scryptSync(fallbackSeed, 'pageturner-vercel-v1', 32);
     return cachedMasterKey;
   }
 
@@ -35,9 +50,6 @@ function getMasterKey() {
   return cachedMasterKey;
 }
 
-/**
- * Encrypts a UTF-8 string using AES-256-GCM.
- */
 export function encryptSecret(plaintext) {
   if (!plaintext) return '';
   const key = getMasterKey();
@@ -48,9 +60,6 @@ export function encryptSecret(plaintext) {
   return `v1:${iv.toString('base64')}:${tag.toString('base64')}:${encrypted.toString('base64')}`;
 }
 
-/**
- * Decrypts a value produced by encryptSecret().
- */
 export function decryptSecret(payload) {
   if (!payload) return '';
   if (!String(payload).startsWith('v1:')) return String(payload);
@@ -71,9 +80,6 @@ export function decryptSecret(payload) {
   }
 }
 
-/**
- * Masks a library card number for safe display (e.g. "2904••••••1842").
- */
 export function maskCardNumber(cardNumber) {
   const clean = String(cardNumber || '').replace(/\s+/g, '');
   if (clean.length <= 4) return clean ? '••••' : '';
@@ -81,9 +87,6 @@ export function maskCardNumber(cardNumber) {
   return `${clean.slice(0, 4)}••••••${clean.slice(-4)}`;
 }
 
-/**
- * Signs a lightweight session token for the optional Family Passcode Gate.
- */
 export function createSessionToken() {
   const issuedAt = Date.now().toString();
   const sig = crypto.createHmac('sha256', getMasterKey()).update(`session:${issuedAt}`).digest('hex');
@@ -95,7 +98,6 @@ export function verifySessionToken(token) {
   const [issuedAt, sig] = token.split('.');
   if (!issuedAt || !sig) return false;
   const ageMs = Date.now() - Number(issuedAt);
-  // Sessions stay signed in for 30 days on family phones
   if (!Number.isFinite(ageMs) || ageMs < 0 || ageMs > 30 * 24 * 60 * 60 * 1000) return false;
   const expected = crypto.createHmac('sha256', getMasterKey()).update(`session:${issuedAt}`).digest('hex');
   const a = Buffer.from(sig, 'utf8');

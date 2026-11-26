@@ -1,28 +1,49 @@
 # PageTurner — San Mateo Main Library Grab & Go
 
-A private, mobile-first web app for your family to discover great new books, reserve them at **San Mateo Main Library (55 W. Third Ave)**, and check them off on a **Grab & Go** pickup dashboard—so you can walk in, grab your holds off the shelf, and leave.
+A private, **\$0/month** iPhone 15-ready web app for your family to manage a curated **NYT / Barnes & Noble / Caldecott Book Log** backed by **Google Sheets**, check live **San Mateo Main Library** shelf availability, **1-click batch reserve**, and walk in for **Grab & Go** pickup—even when your laptop is off.
 
 ---
 
-## Features Built for Your Family
+## Go Live for \$0/Month on Vercel (3 Minutes)
 
-- **Grab & Go Pickup Dashboard** — Shows everything ready on the San Mateo Main Library hold shelf (with pickup deadlines and shelf name), live open/closing status, 2-hour underground parking info, and one-tap **Mark Grabbed** checkoffs.
-- **Discover Great Books** — Queries San Mateo Main Library's live catalog (`7S`) to show:
-  - **Curated Aisles**: *Top-Rated Kids*, *New Kids Arrivals*, *Kids Graphic Novels*, *Award Winners*, *Top Adult Fiction*, *New Adult Arrivals*, and *Cookbooks & Food*—filtered by **On the Shelf at Main Now** so you can skip long waitlists.
-  - **Find Books Like…**: Enter any book your family loved (e.g., *The Wild Robot*, *Dog Man*, *Percy Jackson*) to surface next books in the series, same-author reads, and similar highly rated titles sitting at San Mateo Main.
-  - **Instant Search & 1-Tap Reserve at Main**.
-- **Family Book List** — Drop book ideas anytime and reserve them individually or hit **Reserve All at Main**.
-- **Works 24/7 Even When Your Laptop Is Off** — Host privately on Render, Railway, or Fly.io and tap **Add to Home Screen** on your phone.
+Your **Google Sheet** acts as the permanent cloud database, and **Vercel Free (Hobby)** runs the private backend + automatic monthly book scout for **\$0/month** with instant iPhone loading.
 
-## Privacy & Security (Zero Secrets on GitHub)
+### Step 1: Turn On Your Google Sheet Cloud Bridge (1 Minute)
+1. Open your **PageTurner — Family Book Log** Google Sheet.
+2. Click **Extensions → Apps Script**.
+3. Delete any default code, paste the entire contents of [`google-apps-script/Code.gs`](google-apps-script/Code.gs), and click **Save**.
+4. Click **Deploy → New deployment → Web app**:
+   - **Execute as:** `Me`
+   - **Who has access:** `Anyone` *(your sheet itself remains completely private—only this random URL can talk to it)*.
+5. Copy the **Web app URL** (`https://script.google.com/macros/s/.../exec`).
 
-- `.env` and `data/` (where your encrypted library card vault lives) are strictly ignored in `.gitignore`.
-- Library card numbers and PINs are encrypted at rest with **AES-256-GCM** using `ENCRYPTION_SECRET`.
-- Set `APP_PASSCODE` on your cloud host to lock the entire app behind a private family passcode (signed HttpOnly cookie sessions).
+### Step 2: Deploy Free on Vercel (3 Clicks)
+1. Go to [vercel.com](https://vercel.com) → **Continue with GitHub**.
+2. Click **Add New… → Project** → import **`iambingjiang-maker/PageTurner`**.
+3. Open **Environment Variables** and add these private variables *(they stay locked inside Vercel and are NEVER stored in GitHub)*:
+
+| Variable | Value |
+| --- | --- |
+| `APP_PASSCODE` | Your private family passcode to open the app |
+| `ENCRYPTION_SECRET` | Any random long secret phrase (32+ characters) |
+| `SMPL_CARD_NUMBER` | Your 14-digit San Mateo Public Library barcode |
+| `SMPL_PIN` | Your library PIN |
+| `SMPL_SHELF_NAME` | Last name on the San Mateo Main hold shelf (e.g. `JIANG`) |
+| `GOOGLE_SHEET_URL` | Your Google Sheet `/edit` link |
+| `GOOGLE_SHEET_WEBHOOK_URL` | The Apps Script Web app URL from Step 1 |
+
+4. Click **Deploy**! In ~30 seconds, your private app is live at `https://page-turner-....vercel.app`.
+
+> **Automatic Monthly New-Book Scout:** [`vercel.json`](vercel.json) automatically triggers `/api/cron/monthly-scout` on the **1st of every month** to check San Mateo Main Library's newest 4+ star kids books & favorite authors and append fresh unread picks straight to your Google Sheet.
+
+### Step 3: Install on iPhone 15
+1. Open your Vercel URL in **Safari** on your iPhone 15.
+2. Enter your family passcode (stays signed in for 30 days).
+3. Tap **Share** (square with arrow) → **Add to Home Screen**.
 
 ---
 
-## Quick Start (Local)
+## Local Development
 
 ```bash
 npm install
@@ -30,20 +51,7 @@ cp .env.example .env
 npm start
 ```
 
-Open `http://localhost:3000`. Go to **Library Card** to connect your San Mateo Public Library card(s) for live automatic syncing.
-
-## Deploy Privately (24/7 Access on Phones)
-
-### Option A: Render (`render.yaml`)
-1. Connect your **private** `PageTurner` GitHub repository on [Render](https://render.com) as a Blueprint.
-2. Set `APP_PASSCODE` in Render's **Environment** tab to your chosen family passcode (`ENCRYPTION_SECRET` is generated automatically).
-3. Open your private Render URL on your phone, unlock with your passcode, and connect your San Mateo Public Library card in **Library Card**.
-
-### Option B: Railway / Fly.io (`Dockerfile`)
-1. Deploy directly from your private GitHub repo using `Dockerfile` with a persistent volume at `/app/data`.
-2. Set `APP_PASSCODE` and `ENCRYPTION_SECRET` as secret environment variables.
-
-## Running Tests
+Run tests:
 
 ```bash
 npm test
