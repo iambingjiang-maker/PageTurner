@@ -1,7 +1,7 @@
 {
   "name": "pageturner-san-mateo",
   "version": "1.0.0",
-  "description": "Private family app for reserving books & Grab-and-Go pickup at San Mateo Public Library",
+  "description": "Mobile-first PWA for curated children's book discovery, real-time public library shelf checks, and 1-click batch holds via BiblioCommons and Google Sheets",
   "type": "module",
   "main": "server/index.js",
   "scripts": {
